@@ -59,6 +59,7 @@ function initialState() {
     equipment: seedEquipment(),
     notes: "Os equipamentos devem ser avaliados individualmente. Este documento registra a avaliação técnica e os serviços indicados.",
     warranty: "Peças: garantia de 1 ano, conforme condições do fabricante/fornecedor. Mão de obra: garantia de 3 meses.",
+    showSignature: true,
   };
 }
 
@@ -110,6 +111,13 @@ function renderEditor() {
     ${state.mode === "report" ? reportEquipmentEditor() : listEditor()}
 
     ${state.mode === "report" ? conclusionEditor() : valuesEditor()}
+
+    <div class="toggle-card">
+      <label class="toggle-row">
+        <input type="checkbox" id="toggle-signature" ${state.showSignature ? "checked" : ""} />
+        <span>Incluir campo de assinatura no documento</span>
+      </label>
+    </div>
 
     <div class="editor-actions">
       <button class="primary-button" id="btn-print"><span>🖨</span> Imprimir</button>
@@ -311,6 +319,11 @@ function wireEditorEvents() {
   document.getElementById("btn-download").addEventListener("click", handleDownloadPdf);
   document.getElementById("btn-reset").addEventListener("click", resetAll);
   document.getElementById("btn-reset-top").addEventListener("click", resetAll);
+
+  document.getElementById("toggle-signature").addEventListener("change", (e) => {
+    state.showSignature = e.target.checked;
+    renderPreview();
+  });
 }
 
 function changeEquipmentCount(count) {
@@ -391,11 +404,12 @@ function renderPreview() {
     ${closingSection}
 
     <div class="paper-footer">
+      ${state.showSignature ? `
       <div class="signature">
         <span>Assinatura e Carimbo do Técnico Responsável</span>
         <div class="signature-line"></div>
         <small>Data: ${esc(state.date) || "—"}</small>
-      </div>
+      </div>` : ""}
       <div class="footer-note">${info.icon} Documento gerado no padrão MasterServ Limeira</div>
     </div>
   `;
@@ -472,41 +486,61 @@ async function handleDownloadPdf() {
   btn.disabled = true;
   paper.classList.add("pdf-capture");
   try {
-    const canvas = await html2canvas(paper, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
 
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    const marginMm = 8;
+    const contentWidthMm = pageWidth - marginMm * 2;
+    const maxContentHeightMm = pageHeight - marginMm * 2;
 
-    const imgData = canvas.toDataURL("image/jpeg", 0.95);
+    // Estima a altura total do documento (em mm) a partir do próprio DOM,
+    // sem precisar renderizar tudo antes de decidir a estratégia.
+    const widthPx = paper.getBoundingClientRect().width || paper.offsetWidth;
+    const mmPerPx = contentWidthMm / widthPx;
+    const naturalHeightMm = paper.scrollHeight * mmPerPx;
 
-    if (imgHeight <= pageHeight) {
-      pdf.addImage(imgData, "JPEG", 0, 0, imgWidth, imgHeight);
+    if (naturalHeightMm <= maxContentHeightMm * 1.35) {
+      // Cabe (ou quase cabe) em 1 folha: captura tudo de uma vez e, se
+      // necessário, reduz levemente a escala para caber sem cortar nada.
+      const canvas = await html2canvas(paper, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+      const canvasHeightMm = (canvas.height * contentWidthMm) / canvas.width;
+      const scale = Math.min(1, maxContentHeightMm / canvasHeightMm);
+      const drawWidth = contentWidthMm * scale;
+      const drawHeight = canvasHeightMm * scale;
+      const x = marginMm + (contentWidthMm - drawWidth) / 2;
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", x, marginMm, drawWidth, drawHeight);
     } else {
-      // Documento maior que uma página A4: divide em várias páginas
-      let remainingHeight = canvas.height;
-      let position = 0;
-      const pageCanvasHeight = Math.floor((pageHeight * canvas.width) / imgWidth);
-      const sliceCanvas = document.createElement("canvas");
-      sliceCanvas.width = canvas.width;
-      const ctx = sliceCanvas.getContext("2d");
+      // Documento mais longo: cada bloco (cabeçalho, cada caixa, rodapé) é
+      // capturado separadamente e nunca é dividido entre duas páginas —
+      // se não couber no espaço restante, pula inteiro para a próxima página.
+      const blocks = Array.from(paper.children);
+      let currentY = marginMm;
+      const gapMm = 3;
 
-      let first = true;
-      while (remainingHeight > 0) {
-        const sliceHeight = Math.min(pageCanvasHeight, remainingHeight);
-        sliceCanvas.height = sliceHeight;
-        ctx.clearRect(0, 0, sliceCanvas.width, sliceHeight);
-        ctx.drawImage(canvas, 0, position, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
-        const sliceData = sliceCanvas.toDataURL("image/jpeg", 0.95);
-        const sliceHeightMm = (sliceHeight * imgWidth) / canvas.width;
-        if (!first) pdf.addPage();
-        pdf.addImage(sliceData, "JPEG", 0, 0, imgWidth, sliceHeightMm);
-        first = false;
-        position += sliceHeight;
-        remainingHeight -= sliceHeight;
+      for (const block of blocks) {
+        if (block.offsetHeight < 1) continue; // ignora elementos vazios/invisíveis
+        const canvas = await html2canvas(block, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+        let blockHeightMm = (canvas.height * contentWidthMm) / canvas.width;
+        let drawWidth = contentWidthMm;
+
+        if (blockHeightMm > maxContentHeightMm) {
+          // Bloco maior que uma página inteira (raro): reduz só este bloco
+          // para caber por inteiro em vez de cortá-lo.
+          const s = maxContentHeightMm / blockHeightMm;
+          drawWidth = contentWidthMm * s;
+          blockHeightMm = maxContentHeightMm;
+        }
+
+        if (currentY + blockHeightMm > pageHeight - marginMm && currentY > marginMm) {
+          pdf.addPage();
+          currentY = marginMm;
+        }
+
+        const x = marginMm + (contentWidthMm - drawWidth) / 2;
+        pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", x, currentY, drawWidth, blockHeightMm);
+        currentY += blockHeightMm + gapMm;
       }
     }
 

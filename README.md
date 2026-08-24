@@ -11,7 +11,8 @@ Feita em **HTML, CSS e JavaScript puro** — sem etapa de build, sem dependênci
 - Suporte a múltiplos equipamentos no laudo técnico
 - Cálculo automático dos totais
 - **Imprimir** (abre a janela de impressão do navegador, já formatada para A4)
-- **Baixar PDF** (gera e baixa um arquivo `.pdf` do documento, sem precisar imprimir)
+- **Baixar PDF**: tenta encaixar o documento inteiro em 1 folha A4; se o conteúdo for mais longo, divide em várias páginas **sem cortar texto ao meio** — cada bloco (cabeçalho, seção, item) pula inteiro para a página seguinte quando necessário
+- Campo de assinatura **opcional**: um checkbox no editor permite incluir ou remover a área de assinatura do documento
 - Botão para restaurar o exemplo padrão
 
 ## 🚀 Como usar localmente
